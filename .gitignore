@@ -45,5 +45,4 @@ Thumbs.db
 !database/migrations/*.sql
 
 # Exclude data dumps and other SQL files in root
-*.sql
 *.sqlite

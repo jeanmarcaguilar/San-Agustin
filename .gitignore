@@ -40,5 +40,10 @@ Thumbs.db
 *.local.*
 
 # Database files
+# Allow schema files in the database directory
+!database/*.sql
+!database/migrations/*.sql
+
+# Exclude data dumps and other SQL files in root
 *.sql
 *.sqlite

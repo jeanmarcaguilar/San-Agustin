@@ -3,9 +3,10 @@ node_modules/
 vendor/
 
 # Environment files
-.env
 .env.local
 .env.*.local
+# But allow .env.example to be committed
+!.env.example
 
 # Build output
 dist/

@@ -1,0 +1,1172 @@
+<?php
+// Enable error reporting for debugging
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+session_start();
+
+// Check if user is logged in and is a librarian
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'librarian') {
+    header('Location: /San%20Agustin/login.php');
+    exit();
+}
+
+try {
+    // Include necessary files
+    require_once __DIR__ . '/../config/database.php';
+    
+    // Create database instance
+    $database = new Database();
+    
+    // Get user info from login_db
+    $loginConn = $database->getConnection(''); // Connect to login_db
+    $user_id = $_SESSION['user_id'];
+    
+    $query = "SELECT id, username, email, role FROM users WHERE id = :user_id AND role = 'librarian' LIMIT 1";
+    $stmt = $loginConn->prepare($query);
+    $stmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $stmt->execute();
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$user) {
+        throw new Exception("User not found or unauthorized access");
+    }
+    
+    // Get librarian details from librarian_db
+    $librarianConn = $database->getConnection('librarian');
+    
+    // Check if librarians table exists, if not create it
+    $checkTable = $librarianConn->query("SHOW TABLES LIKE 'librarians'");
+    if ($checkTable->rowCount() == 0) {
+        $createTable = "CREATE TABLE IF NOT EXISTS `librarians` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `user_id` int(11) NOT NULL,
+            `librarian_id` varchar(20) NOT NULL,
+            `first_name` varchar(50) NOT NULL,
+            `last_name` varchar(50) NOT NULL,
+            `contact_number` varchar(20) DEFAULT NULL,
+            `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+            `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `librarian_id` (`librarian_id`),
+            KEY `user_id` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+        $librarianConn->exec($createTable);
+    }
+    
+    // Get or create librarian profile
+    $query = "SELECT * FROM librarians WHERE user_id = :user_id LIMIT 1";
+    $stmt = $librarianConn->prepare($query);
+    $stmt->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+    $stmt->execute();
+    $librarianData = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$librarianData) {
+        $librarian_id = 'LIB' . strtoupper(substr($user['username'], 0, 3)) . str_pad($user_id, 4, '0', STR_PAD_LEFT);
+        $first_name = ucfirst($user['username']);
+        $last_name = 'Librarian';
+        
+        $query = "INSERT INTO librarians (user_id, librarian_id, first_name, last_name) 
+                 VALUES (:user_id, :librarian_id, :first_name, :last_name)";
+        $stmt = $librarianConn->prepare($query);
+        
+        $stmt->execute([
+            ':user_id' => $user_id,
+            ':librarian_id' => $librarian_id,
+            ':first_name' => $first_name,
+            ':last_name' => $last_name
+        ]);
+        
+        $librarianData = [
+            'id' => $librarianConn->lastInsertId(),
+            'user_id' => $user_id,
+            'librarian_id' => $librarian_id,
+            'first_name' => $first_name,
+            'last_name' => $last_name
+        ];
+    }
+    
+    // Combine user and librarian data
+    $userData = array_merge($user, $librarianData);
+    $pageTitle = 'Inventory Management - ' . htmlspecialchars($userData['first_name'] . ' ' . $userData['last_name']);
+    
+    // Get all categories
+    $categories = [];
+    $query = "SELECT * FROM categories ORDER BY category_name";
+    $stmt = $librarianConn->prepare($query);
+    $stmt->execute();
+    $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get all books with category names
+    $books = [];
+    $query = "SELECT b.*, c.category_name 
+              FROM books b 
+              LEFT JOIN categories c ON b.category_id = c.category_id 
+              ORDER BY b.title";
+    $stmt = $librarianConn->prepare($query);
+    $stmt->execute();
+    $books = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+} catch (PDOException $e) {
+    die("Database Error: " . $e->getMessage() . "<br>File: " . $e->getFile() . "<br>Line: " . $e->getLine());
+} catch (Exception $e) {
+    die("Error: " . $e->getMessage());
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 Librarian Portal – Inventory Management</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#eefafc',
+                            100: '#d5f2f6',
+                            200: '#afe4ed',
+                            300: '#78d0e0',
+                            400: '#39b4cc',
+                            500: '#1d98b0',
+                            600: '#1b7a96',
+                            700: '#1d637a',
+                            800: '#215265',
+                            900: '#204456',
+                        },
+                        secondary: {
+                            50: '#f5f8f7',
+                            100: '#dfe8e6',
+                            200: '#bed1cd',
+                            300: '#95b2ac',
+                            400: '#6f8f89',
+                            500: '#55736e',
+                            600: '#425c58',
+                            700: '#384b48',
+                            800: '#303d3b',
+                            900: '#2b3534',
+                        },
+                        dark: {
+                            50: '#f8fafc',
+                            100: '#f1f5f9',
+                            200: '#e2e8f0',
+                            300: '#cbd5e1',
+                            400: '#94a3b8',
+                            500: '#64748b',
+                            600: '#475569',
+                            700: '#334155',
+                            800: '#1e293b',
+                            900: '#0f172a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+        body {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            color: #334155;
+            min-height: 100vh;
+        }
+        .sidebar {
+            transition: all 0.3s ease;
+            background: linear-gradient(to bottom, #2b3534 0%, #384b48 100%);
+        }
+        .sidebar.collapsed {
+            width: 70px;
+        }
+        .sidebar.collapsed .sidebar-text,
+        .sidebar.collapsed .logo-text,
+        .sidebar.collapsed .user-text,
+        .sidebar.collapsed .events-title,
+        .sidebar.collapsed .event-details {
+            display: none;
+        }
+        .sidebar.collapsed .logo-container {
+            margin: 0 auto;
+        }
+        .sidebar.collapsed .user-initials {
+            margin: 0 auto;
+        }
+        .sidebar.collapsed .nav-item {
+            justify-content: center;
+            padding: 0.75rem;
+        }
+        .sidebar.collapsed .nav-item i {
+            margin-right: 0;
+        }
+        .sidebar.collapsed .submenu {
+            display: none !important;
+        }
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                position: fixed;
+                z-index: 40;
+                height: 100vh;
+                width: 250px;
+            }
+            .sidebar-open {
+                transform: translateX(0);
+            }
+            .overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background-color: rgba(0, 0, 0, 0.5);
+                z-index: 30;
+            }
+            .overlay-open {
+                display: block;
+            }
+        }
+        .dashboard-card {
+            transition: all 0.3s ease;
+            background: white;
+        }
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        .notification-dot {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #1d98b0;
+            color: white;
+            font-size: 0.7rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .header-bg {
+            background: linear-gradient(to right, #2b3534 0%, #384b48 100%);
+        }
+        .logo-container {
+            background: linear-gradient(135deg, #1d98b0 0%, #39b4cc 100%);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        .submenu {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            background: #303d3b;
+            border-radius: 8px;
+            margin-top: 4px;
+        }
+        .submenu.open {
+            max-height: 500px;
+            transition: max-height 0.3s ease-in;
+        }
+        .nav-item .chevron-icon {
+            transition: transform 0.3s ease;
+        }
+        .nav-item.open .chevron-icon {
+            transform: rotate(180deg);
+        }
+        .notification-panel {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            width: 350px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+            z-index: 50;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+        .notification-panel.open {
+            max-height: 400px;
+        }
+        .user-menu {
+            position: absolute;
+            top: calc(100% + 0.5rem);
+            right: 0;
+            width: 180px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            z-index: 50;
+            padding: 0.75rem 0;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: opacity 0.3s, visibility 0.3s, transform 0.3s;
+        }
+        .user-menu.user-menu-open {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        .toast {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-left: 4px solid;
+            opacity: 0;
+            transform: translateX(20px);
+            transition: all 0.3s ease;
+            max-width: 350px;
+            min-width: 250px;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        .toast.success {
+            border-left-color: #1d98b0;
+        }
+        .toast.info {
+            border-left-color: #39b4cc;
+        }
+        .toast.warning {
+            border-left-color: #facc15;
+        }
+        .toast.error {
+            border-left-color: #ef4444;
+        }
+        .toast .toast-icon {
+            font-size: 1.2rem;
+        }
+        .toast .toast-message {
+            flex: 1;
+            font-size: 0.875rem;
+            color: #1f2937;
+        }
+        .toast .toast-close {
+            cursor: pointer;
+            color: #6b7280;
+            font-size: 1rem;
+            transition: color 0.2s ease;
+        }
+        .toast .toast-close:hover {
+            color: #1f2937;
+        }
+        .modal {
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .modal.modal-open {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+        }
+        .modal.modal-hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex">
+    <!-- Overlay for mobile sidebar -->
+    <div id="overlay" class="overlay" onclick="closeSidebar()"></div>
+
+    <!-- Sidebar -->
+    <div id="sidebar" class="sidebar w-64 min-h-screen flex flex-col text-white">
+        <!-- School Logo -->
+        <div class="p-5 border-b border-secondary-700 flex flex-col items-center">
+            <div class="logo-container w-16 h-16 rounded-full flex items-center justify-center text-white font-bold text-2xl mb-3 shadow-md">
+                <i class="fas fa-book"></i>
+            </div>
+            <h1 class="text-xl font-bold text-center logo-text">San Agustin Elementary School</h1>
+            <p class="text-xs text-secondary-200 mt-1 logo-text">Library Management System</p>
+        </div>
+        
+        <!-- User Profile -->
+        <div class="p-5 border-b border-secondary-700">
+            <div class="flex items-center space-x-3">
+                <div class="w-12 h-12 rounded-full bg-primary-500 flex items-center justify-center text-white font-bold shadow-md user-initials">
+                    <?php echo htmlspecialchars($userData ? strtoupper(substr($userData['first_name'], 0, 1) . substr($userData['last_name'], 0, 1)) : 'LB'); ?>
+                </div>
+                <div class="user-text">
+                    <h2 class="font-bold text-white"><?php echo htmlspecialchars($userData ? trim($userData['first_name'] . ' ' . $userData['last_name']) : 'Librarian'); ?></h2>
+                    <p class="text-xs text-secondary-200"><?php echo htmlspecialchars($userData ? ($userData['role'] ?? 'Head Librarian') : 'Head Librarian'); ?></p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Navigation -->
+        <div class="flex-1 p-4 overflow-y-auto custom-scrollbar">
+            <ul class="space-y-2">
+                <li>
+                    <a href="dashboard.php" class="flex items-center p-3 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors nav-item">
+                        <i class="fas fa-home w-5"></i>
+                        <span class="ml-3 sidebar-text">Dashboard</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" class="flex items-center p-3 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors nav-item" data-submenu="catalog-submenu">
+                        <i class="fas fa-book w-5"></i>
+                        <span class="ml-3 sidebar-text">Catalog Management</span>
+                        <i class="fas fa-chevron-down ml-auto text-xs chevron-icon"></i>
+                    </a>
+                    <div id="catalog-submenu" class="submenu pl-4 mt-1">
+                        <a href="add_book.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-plus w-5"></i>
+                            <span class="ml-3 sidebar-text">Add New Books</span>
+                        </a>
+                        <a href="books.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-eye w-5"></i>
+                            <span class="ml-3 sidebar-text">View Catalog</span>
+                        </a>
+                        <a href="catalog_reports.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-print w-5"></i>
+                            <span class="ml-3 sidebar-text">Catalog Reports</span>
+                        </a>
+                    </div>
+                </li>
+                <li>
+                    <a href="checkouts.php" class="flex items-center p-3 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors nav-item">
+                        <i class="fas fa-exchange-alt w-5"></i>
+                        <span class="ml-3 sidebar-text">Circulation</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" class="flex items-center p-3 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors nav-item" data-submenu="patrons-submenu">
+                        <i class="fas fa-users w-5"></i>
+                        <span class="ml-3 sidebar-text">Patron Management</span>
+                        <i class="fas fa-chevron-down ml-auto text-xs chevron-icon"></i>
+                    </a>
+                    <div id="patrons-submenu" class="submenu pl-4 mt-1">
+                        <a href="patrons.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-list w-5"></i>
+                            <span class="ml-3 sidebar-text">View Patrons</span>
+                        </a>
+                        <a href="borrowing_history.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-history w-5"></i>
+                            <span class="ml-3 sidebar-text">Borrowing History</span>
+                        </a>
+                    </div>
+                </li>
+                <li>
+                    <a href="reading_program.php" class="flex items-center p-3 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors nav-item">
+                        <i class="fas fa-book-reader w-5"></i>
+                        <span class="ml-3 sidebar-text">Reading Programs</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="#" class="flex items-center p-3 rounded-lg bg-primary-600 text-white shadow-md nav-item" data-submenu="reports-submenu">
+                        <i class="fas fa-chart-bar w-5"></i>
+                        <span class="ml-3 sidebar-text">Reports & Analytics</span>
+                        <i class="fas fa-chevron-down ml-auto text-xs chevron-icon"></i>
+                    </a>
+                    <div id="reports-submenu" class="submenu pl-4 mt-1 open">
+                        <a href="circulation_reports.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-exchange-alt w-5"></i>
+                            <span class="ml-3 sidebar-text">Circulation Reports</span>
+                        </a>
+                        <a href="popular_books.php" class="flex items-center p-2 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors">
+                            <i class="fas fa-star w-5"></i>
+                            <span class="ml-3 sidebar-text">Popular Books</span>
+                        </a>
+                        <a href="inventory.php" class="flex items-center p-2 rounded-lg bg-primary-600 text-white shadow-md">
+                            <i class="fas fa-clipboard-check w-5"></i>
+                            <span class="ml-3 sidebar-text">Inventory Reports</span>
+                        </a>
+                    </div>
+                </li>
+                </li>
+            </ul>
+            
+            <!-- Upcoming Events -->
+            <div class="mt-10 p-4 bg-secondary-800 rounded-lg events-container">
+                <h3 class="text-sm font-bold text-white mb-3 flex items-center events-title">
+                    <i class="fas fa-calendar-day mr-2"></i>Upcoming Library Events
+                </h3>
+                <div class="space-y-3 event-details">
+                    <div class="flex items-start">
+                        <div class="bg-primary-500 text-white p-1 rounded text-xs w-6 h-6 flex items-center justify-center mt-1 flex-shrink-0">28</div>
+                        <div class="ml-2">
+                            <p class="text-xs font-medium text-white">Book Fair</p>
+                            <p class="text-xs text-secondary-300">10:00 AM - Library Hall</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start">
+                        <div class="bg-primary-500 text-white p-1 rounded text-xs w-6 h-6 flex items-center justify-center mt-1 flex-shrink-0">30</div>
+                        <div class="ml-2">
+                            <p class="text-xs font-medium text-white">Storytelling Session</p>
+                            <p class="text-xs text-secondary-300">2:00 PM - Reading Room</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start">
+                        <div class="bg-primary-500 text-white p-1 rounded text-xs w-6 h-6 flex items-center justify-center mt-1 flex-shrink-0">2</div>
+                        <div class="ml-2">
+                            <p class="text-xs font-medium text-white">Library Orientation</p>
+                            <p class="text-xs text-secondary-300">All Day - Main Library</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start">
+                        <div class="bg-primary-500 text-white p-1 rounded text-xs w-6 h-6 flex items-center justify-center mt-1 flex-shrink-0">5</div>
+                        <div class="ml-2">
+                            <p class="text-xs font-medium text-white">Reading Challenge Kickoff</p>
+                            <p class="text-xs text-secondary-300">9:00 AM - Library Hall</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Footer -->
+        <div class="p-4 border-t border-secondary-700">
+            <button onclick="toggleSidebarCollapse()" class="flex items-center p-3 rounded-lg text-secondary-200 hover:bg-secondary-700 hover:text-white transition-colors w-full justify-center">
+                <i class="fas fa-chevron-left" id="collapse-icon"></i>
+                <span class="ml-3 sidebar-text">Collapse Sidebar</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col">
+        <!-- Header -->
+        <header class="header-bg text-white p-4 flex items-center justify-between shadow-md sticky top-0 z-50">
+            <div class="flex items-center">
+                <button id="sidebar-toggle" class="md:hidden text-white mr-4 focus:outline-none" onclick="toggleSidebar()">
+                    <i class="fas fa-bars text-xl"></i>
+                </button>
+                <h1 class="text-xl font-bold">Inventory Management</h1>
+            </div>
+            
+            <div class="flex items-center space-x-4">
+                <div class="relative">
+                    <button id="notification-btn" class="text-white hover:text-primary-200 transition-colors relative" onclick="toggleNotifications()">
+                        <i class="fas fa-bell text-xl"></i>
+                        <span class="notification-dot">5</span>
+                    </button>
+                    
+                    <!-- Notification Panel -->
+                    <div id="notification-panel" class="notification-panel">
+                        <div class="p-4 border-b border-gray-200">
+                            <h3 class="font-bold text-gray-800">Notifications</h3>
+                        </div>
+                        <div class="overflow-y-auto max-h-72">
+                            <div class="p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                <div class="flex items-start">
+                                    <div class="bg-blue-100 p-2 rounded-full mr-3">
+                                        <i class="fas fa-exclamation-circle text-blue-500"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-medium text-gray-800">Overdue Book</p>
+                                        <p class="text-xs text-gray-500">Book overdue by John Doe</p>
+                                        <p class="text-xs text-gray-400">Sep 25, 2025, 10:30 AM</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                <div class="flex items-start">
+                                    <div class="bg-blue-100 p-2 rounded-full mr-3">
+                                        <i class="fas fa-book text-blue-500"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-medium text-gray-800">New Book Added</p>
+                                        <p class="text-xs text-gray-500">"The Hobbit" added to catalog</p>
+                                        <p class="text-xs text-gray-400">Sep 24, 2025, 2:15 PM</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                <div class="flex items-start">
+                                    <div class="bg-blue-100 p-2 rounded-full mr-3">
+                                        <i class="fas fa-exchange-alt text-blue-500"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-medium text-gray-800">Book Checked Out</p>
+                                        <p class="text-xs text-gray-500">"Charlotte's Web" checked out</p>
+                                        <p class="text-xs text-gray-400">Sep 24, 2025, 11:00 AM</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                <div class="flex items-start">
+                                    <div class="bg-blue-100 p-2 rounded-full mr-3">
+                                        <i class="fas fa-undo text-blue-500"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-medium text-gray-800">Book Returned</p>
+                                        <p class="text-xs text-gray-500">"Matilda" returned on time</p>
+                                        <p class="text-xs text-gray-400">Sep 23, 2025, 3:45 PM</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
+                                <div class="flex items-start">
+                                    <div class="bg-blue-100 p-2 rounded-full mr-3">
+                                        <i class="fas fa-calendar-alt text-blue-500"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-medium text-gray-800">Event Reminder</p>
+                                        <p class="text-xs text-gray-500">Book Fair scheduled</p>
+                                        <p class="text-xs text-gray-400">Sep 23, 2025, 9:00 AM</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="p-3 border-t border-gray-200 text-center">
+                            <a href="notifications.php" class="text-primary-600 hover:text-primary-700 text-sm font-medium">View All Notifications</a>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="relative">
+                    <button onclick="toggleUserMenu()" class="w-10 h-10 rounded-full bg-primary-500 flex items-center justify-center text-white font-bold shadow-md">
+                        <?php echo htmlspecialchars($userData ? strtoupper(substr($userData['first_name'], 0, 1) . substr($userData['last_name'], 0, 1)) : 'LB'); ?>
+                    </button>
+                    
+                    <div id="user-menu" class="user-menu">
+                        <div class="px-4 py-2 border-b border-gray-100">
+                            <p class="text-gray-800 font-medium"><?php echo htmlspecialchars($userData ? trim($userData['first_name'] . ' ' . $userData['last_name']) : 'Librarian'); ?></p>
+                            <p class="text-xs text-gray-500"><?php echo htmlspecialchars($userData ? ($userData['email'] ?? 'librarian@sanaugustin.edu') : 'librarian@sanaugustin.edu'); ?></p>
+                        </div>
+                        <a href="profile.php" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 transition-colors">Profile</a>
+                        <a href="settings.php" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 transition-colors">Settings</a>
+                        <a href="/San%20Agustin/logout.php" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 transition-colors">Sign Out</a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 p-5 overflow-y-auto bg-gray-50">
+            <div class="max-w-7xl mx-auto">
+                <div class="bg-white rounded-xl p-6 border border-gray-200 shadow-sm mb-6 dashboard-card">
+                    <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
+                        <h1 class="text-2xl font-bold text-gray-800 mb-4 md:mb-0">Inventory Management</h1>
+                        <div class="flex space-x-3">
+                            <button onclick="window.print()" class="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors flex items-center">
+                                <i class="fas fa-print mr-2"></i> Print
+                            </button>
+                            <button id="exportPdf" class="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors flex items-center">
+                                <i class="fas fa-file-pdf mr-2"></i> Export PDF
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Books Table -->
+                    <div class="bg-white rounded-xl border border-gray-200 shadow-sm dashboard-card">
+                        <div class="px-6 py-4 border-b border-gray-200">
+                            <h2 class="text-lg font-semibold text-gray-800">Book Inventory</h2>
+                            <p class="text-sm text-gray-500">All books in the library catalog</p>
+                        </div>
+                        <div class="overflow-x-auto custom-scrollbar">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cover</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Author</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+                                        <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Available</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <?php if (count($books) > 0): ?>
+                                        <?php foreach ($books as $book): ?>
+                                            <tr class="hover:bg-gray-50">
+                                                <td class="px-6 py-4">
+                                                    <?php if (!empty($book['cover_image'])): ?>
+                                                        <img src="../Uploads/covers/<?= htmlspecialchars($book['cover_image']) ?>" alt="Book cover" class="h-16 w-12 object-cover">
+                                                    <?php else: ?>
+                                                        <div class="h-16 w-12 bg-gray-200 flex items-center justify-center">
+                                                            <i class="fas fa-book text-gray-400"></i>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td class="px-6 py-4">
+                                                    <div class="text-sm font-medium text-gray-900"><?= htmlspecialchars($book['title']) ?></div>
+                                                    <div class="text-xs text-gray-500"><?= htmlspecialchars($book['isbn']) ?></div>
+                                                </td>
+                                                <td class="px-6 py-4 text-sm text-gray-500">
+                                                    <?= htmlspecialchars($book['author']) ?>
+                                                </td>
+                                                <td class="px-6 py-4 text-sm text-gray-500">
+                                                    <?= htmlspecialchars($book['category_name'] ?? 'Uncategorized') ?>
+                                                </td>
+                                                <td class="px-6 py-4 text-center">
+                                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                                        <?= ($book['available'] > 0) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800' ?>">
+                                                        <?= $book['available'] ?>/<?= $book['quantity'] ?>
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <tr>
+                                            <td colspan="5" class="px-6 py-4 text-center text-sm text-gray-500">
+                                                No books available in the inventory.
+                                            </td>
+                                        </tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Add Book Modal -->
+    <div id="addBookModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50 modal modal-hidden">
+        <div class="bg-white rounded-xl p-6 w-11/12 md:w-2/3 lg:w-1/2 shadow-lg dashboard-card">
+            <div class="flex justify-between items-center border-b border-gray-200 pb-3 mb-4">
+                <h3 class="text-lg font-semibold text-gray-800">Add New Book</h3>
+                <button onclick="toggleAddBookModal()" class="text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="addBookForm" action="add_book.php" method="POST" enctype="multipart/form-data" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Title *</label>
+                        <input type="text" name="title" required 
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Author *</label>
+                        <input type="text" name="author" required
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">ISBN</label>
+                        <input type="text" name="isbn"
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Category</label>
+                        <select name="category_id" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                            <option value="">Select Category</option>
+                            <?php foreach ($categories as $category): ?>
+                                <option value="<?= $category['category_id'] ?>"><?= htmlspecialchars($category['category_name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Publisher</label>
+                        <input type="text" name="publisher"
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Publication Year</label>
+                        <input type="number" name="publication_year" min="1800" max="<?= date('Y') + 1 ?>"
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Copies *</label>
+                        <input type="number" name="copies" min="1" value="1" required
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Cover Image</label>
+                        <input type="file" name="cover_image" accept="image/*"
+                               class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Description</label>
+                        <textarea name="description" rows="3"
+                                  class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"></textarea>
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700">Location</label>
+                        <input type="text" name="location" placeholder="e.g., A1-B2-03"
+                               class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                    </div>
+                </div>
+                <div class="mt-6 flex justify-end space-x-3">
+                    <button type="button" onclick="toggleAddBookModal()"
+                            class="bg-white py-2 px-4 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+                        Cancel
+                    </button>
+                    <button type="submit" name="add_book"
+                            class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+                        Add Book
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="fixed top-4 right-4 z-[10000] space-y-2"></div>
+
+    <!-- Include jsPDF library for PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM fully loaded. Initializing scripts...');
+
+            // Simulated data for notifications
+            const notifications = [
+                { message: "Overdue Book", description: "Book overdue by John Doe", created_at: "2025-09-25 10:30:00", icon_class: "fas fa-exclamation-circle text-blue-500" },
+                { message: "New Book Added", description: '"The Hobbit" added to catalog', created_at: "2025-09-24 14:15:00", icon_class: "fas fa-book text-blue-500" },
+                { message: "Book Checked Out", description: '"Charlotte\'s Web" checked out', created_at: "2025-09-24 11:00:00", icon_class: "fas fa-exchange-alt text-blue-500" },
+                { message: "Book Returned", description: '"Matilda" returned on time', created_at: "2025-09-23 15:45:00", icon_class: "fas fa-undo text-blue-500" },
+                { message: "Event Reminder", description: "Book Fair scheduled", created_at: "2025-09-23 09:00:00", icon_class: "fas fa-calendar-alt text-blue-500" }
+            ];
+
+            // Toast notifications
+            function showToast(message, type) {
+                const toastContainer = document.getElementById('toastContainer');
+                if (!toastContainer) {
+                    console.error('Toast container not found');
+                    return;
+                }
+                const toast = document.createElement('div');
+                toast.className = `toast ${type}`;
+                toast.setAttribute('role', 'alert');
+                toast.setAttribute('aria-live', 'assertive');
+                toast.setAttribute('aria-atomic', 'true');
+                const icons = {
+                    success: '<i class="fas fa-check-circle toast-icon"></i>',
+                    info: '<i class="fas fa-info-circle toast-icon"></i>',
+                    warning: '<i class="fas fa-exclamation-circle toast-icon"></i>',
+                    error: '<i class="fas fa-times-circle toast-icon"></i>'
+                };
+                toast.innerHTML = `
+                    ${icons[type] || icons.info}
+                    <div class="toast-message">${message}</div>
+                    <i class="fas fa-times toast-close" role="button" aria-label="Close notification"></i>
+                `;
+                toastContainer.appendChild(toast);
+                setTimeout(() => toast.classList.add('show'), 100);
+                const timeout = setTimeout(() => {
+                    toast.classList.remove('show');
+                    setTimeout(() => toast.remove(), 300);
+                }, 5000);
+                toast.querySelector('.toast-close').addEventListener('click', () => {
+                    clearTimeout(timeout);
+                    toast.classList.remove('show');
+                    setTimeout(() => toast.remove(), 300);
+                });
+            }
+
+            // Sidebar toggle for mobile
+            function toggleSidebar() {
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('overlay');
+                if (!sidebar || !overlay) {
+                    console.error('Sidebar or overlay element not found');
+                    showToast('Error toggling sidebar', 'error');
+                    return;
+                }
+                sidebar.classList.toggle('sidebar-open');
+                overlay.classList.toggle('overlay-open');
+                showToast(sidebar.classList.contains('sidebar-open') ? 'Sidebar opened' : 'Sidebar closed', 'info');
+            }
+            
+            function closeSidebar() {
+                const sidebar = document.getElementById('sidebar');
+                const overlay = document.getElementById('overlay');
+                if (!sidebar || !overlay) {
+                    console.error('Sidebar or overlay element not found');
+                    showToast('Error closing sidebar', 'error');
+                    return;
+                }
+                sidebar.classList.remove('sidebar-open');
+                overlay.classList.remove('overlay-open');
+                showToast('Sidebar closed', 'info');
+            }
+            
+            // User menu toggle
+            function toggleUserMenu() {
+                const userMenu = document.getElementById('user-menu');
+                if (!userMenu) {
+                    console.error('User menu element not found');
+                    showToast('Error toggling user menu', 'error');
+                    return;
+                }
+                userMenu.classList.toggle('user-menu-open');
+                showToast(userMenu.classList.contains('user-menu-open') ? 'User menu opened' : 'User menu closed', 'info');
+            }
+            
+            // Notifications toggle
+            function toggleNotifications() {
+                const notificationPanel = document.getElementById('notification-panel');
+                if (!notificationPanel) {
+                    console.error('Notification panel element not found');
+                    showToast('Error toggling notifications', 'error');
+                    return;
+                }
+                notificationPanel.classList.toggle('open');
+                if (notificationPanel.classList.contains('open')) {
+                    const notificationDot = document.querySelector('.notification-dot');
+                    if (notificationDot) {
+                        notificationDot.textContent = '0';
+                    }
+                    showToast('Notifications viewed', 'info');
+                }
+            }
+            
+            // Submenu toggle function
+            function toggleSubmenu(submenuId, element) {
+                if (!submenuId || !element) {
+                    console.error('Invalid submenuId or element:', { submenuId, element });
+                    showToast('Error toggling submenu', 'error');
+                    return;
+                }
+                const submenu = document.getElementById(submenuId);
+                const navItem = element.closest('.nav-item');
+                const chevron = element.querySelector('.chevron-icon');
+                
+                if (!submenu || !navItem) {
+                    console.error('Submenu or nav-item not found:', { submenuId, element });
+                    showToast('Error toggling submenu', 'error');
+                    return;
+                }
+                
+                // Close other open submenus
+                document.querySelectorAll('.submenu.open').forEach(otherSubmenu => {
+                    if (otherSubmenu.id !== submenuId) {
+                        otherSubmenu.classList.remove('open');
+                        const otherNavItem = otherSubmenu.closest('li').querySelector('.nav-item');
+                        if (otherNavItem) {
+                            otherNavItem.classList.remove('open');
+                            const otherChevron = otherNavItem.querySelector('.chevron-icon');
+                            if (otherChevron) otherChevron.classList.remove('rotate-180');
+                        }
+                    }
+                });
+                
+                // Toggle current submenu
+                submenu.classList.toggle('open');
+                navItem.classList.toggle('open');
+                if (chevron) {
+                    chevron.classList.toggle('rotate-180');
+                }
+                
+                showToast(`Submenu ${submenuId.replace('-submenu', '')} ${submenu.classList.contains('open') ? 'expanded' : 'collapsed'}`, 'info');
+            }
+            
+            // Sidebar collapse toggle
+            function toggleSidebarCollapse() {
+                const sidebar = document.getElementById('sidebar');
+                const collapseIcon = document.getElementById('collapse-icon');
+                if (!sidebar || !collapseIcon) {
+                    console.error('Sidebar or collapse icon not found');
+                    showToast('Error toggling sidebar collapse', 'error');
+                    return;
+                }
+                
+                sidebar.classList.toggle('collapsed');
+                
+                if (sidebar.classList.contains('collapsed')) {
+                    collapseIcon.classList.remove('fa-chevron-left');
+                    collapseIcon.classList.add('fa-chevron-right');
+                    const sidebarText = document.querySelector('.sidebar-text');
+                    if (sidebarText) sidebarText.textContent = 'Expand Sidebar';
+                    showToast('Sidebar collapsed', 'info');
+                } else {
+                    collapseIcon.classList.remove('fa-chevron-right');
+                    collapseIcon.classList.add('fa-chevron-left');
+                    const sidebarText = document.querySelector('.sidebar-text');
+                    if (sidebarText) sidebarText.textContent = 'Collapse Sidebar';
+                    showToast('Sidebar expanded', 'info');
+                }
+            }
+            
+            // Add Book Modal toggle
+            function toggleAddBookModal() {
+                const modal = document.getElementById('addBookModal');
+                if (!modal) {
+                    console.error('Add Book modal not found');
+                    showToast('Error toggling Add Book modal', 'error');
+                    return;
+                }
+                modal.classList.toggle('modal-hidden');
+                modal.classList.toggle('modal-open');
+                document.body.style.overflow = modal.classList.contains('modal-open') ? 'hidden' : 'auto';
+                showToast(modal.classList.contains('modal-open') ? 'Add Book modal opened' : 'Add Book modal closed', 'info');
+            }
+            
+            // Handle form submission
+            document.getElementById('addBookForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const form = this;
+                const formData = new FormData(form);
+                const submitBtn = form.querySelector('button[type="submit"]');
+                const originalBtnText = submitBtn.innerHTML;
+                
+                try {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Adding...';
+                    
+                    const response = await fetch('add_book.php', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    // Check if response is JSON
+                    const contentType = response.headers.get('content-type');
+                    let result;
+                    if (contentType && contentType.includes('application/json')) {
+                        result = await response.json();
+                    } else {
+                        // Handle non-JSON response
+                        const text = await response.text();
+                        try {
+                            result = JSON.parse(text);
+                        } catch {
+                            throw new Error('Server response was not in JSON format');
+                        }
+                    }
+                    
+                    if (result.success) {
+                        showToast('Book added successfully!', 'success');
+                        form.reset();
+                        toggleAddBookModal();
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1500);
+                    } else {
+                        throw new Error(result.message || 'Failed to add book');
+                    }
+                } catch (error) {
+                    console.error('Error adding book:', error);
+                    showToast(error.message || 'An error occurred while adding the book', 'error');
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalBtnText;
+                }
+            });
+            
+            // Close menus when clicking outside
+            document.addEventListener('click', function(event) {
+                const userMenu = document.getElementById('user-menu');
+                const userButton = document.querySelector('.relative button:last-child');
+                const notificationPanel = document.getElementById('notification-panel');
+                const notificationButton = document.getElementById('notification-btn');
+                const modal = document.getElementById('addBookModal');
+                const addBookButton = document.querySelector('button[onclick="toggleAddBookModal()"]');
+                
+                if (userMenu && userButton && !userMenu.contains(event.target) && !userButton.contains(event.target)) {
+                    userMenu.classList.remove('user-menu-open');
+                }
+                
+                if (notificationPanel && notificationButton && !notificationPanel.contains(event.target) && !notificationButton.contains(event.target)) {
+                    notificationPanel.classList.remove('open');
+                }
+                
+                if (modal && addBookButton && !modal.contains(event.target) && !addBookButton.contains(event.target) && modal.classList.contains('modal-open')) {
+                    toggleAddBookModal();
+                }
+            });
+            
+            // Export to PDF
+            function exportToPDF() {
+                try {
+                    const { jsPDF } = window.jspdf;
+                    if (!jsPDF) {
+                        console.error('jsPDF library not loaded');
+                        showToast('PDF export failed: Library not loaded', 'error');
+                        return;
+                    }
+                    const doc = new jsPDF('landscape');
+                    
+                    // Add title
+                    doc.setFontSize(18);
+                    doc.text('Inventory Management Report', 14, 20);
+                    
+                    // Add date
+                    doc.setFontSize(10);
+                    doc.text('Generated on: ' + new Date().toLocaleDateString(), 14, 30);
+                    
+                    // Add books table
+                    doc.autoTable({
+                        startY: 40,
+                        head: [['Cover', 'Title', 'Author', 'Category', 'Available']],
+                        body: [
+                            <?php foreach ($books as $book): ?>
+                                [
+                                    '', // Cover image not included in PDF
+                                    '<?= addslashes($book['title']) ?>',
+                                    '<?= addslashes($book['author']) ?>',
+                                    '<?= addslashes($book['category_name'] ?? 'Uncategorized') ?>',
+                                    '<?= $book['available'] ?>/<?= $book['quantity'] ?>'
+                                ],
+                            <?php endforeach; ?>
+                        ],
+                        headStyles: { fillColor: [29, 152, 176] }, // primary-500
+                        theme: 'grid',
+                        margin: { top: 40 }
+                    });
+                    
+                    // Save the PDF
+                    doc.save('inventory_report_<?= date('Y-m-d') ?>.pdf');
+                    showToast('PDF exported successfully', 'success');
+                } catch (error) {
+                    console.error('Error exporting PDF:', error);
+                    showToast('PDF export failed', 'error');
+                }
+            }
+
+            // Attach event listeners for submenu toggling
+            document.querySelectorAll('.nav-item[data-submenu]').forEach(item => {
+                item.addEventListener('click', function(event) {
+                    const submenuId = this.getAttribute('data-submenu');
+                    toggleSubmenu(submenuId, this);
+                });
+            });
+            
+            // Initialize page
+            showToast('Welcome to Inventory Management!', 'success');
+            console.log('Inventory Management page loaded');
+            console.log('toggleAddBookModal function defined:', typeof toggleAddBookModal === 'function');
+            
+            // Add event listener to export button
+            const exportButton = document.getElementById('exportPdf');
+            if (exportButton) {
+                exportButton.addEventListener('click', exportToPDF);
+            } else {
+                console.error('Export PDF button not found');
+            }
+        });
+    </script>
+</body>
+</html>
